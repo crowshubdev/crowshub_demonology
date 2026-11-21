@@ -302,6 +302,17 @@ local function scanGui(root)
     return texts
 end
 
+-- состояние сканера мира (объявлено ДО scanPills, чтобы скан журнала
+-- мог проверить, есть ли уже данные из атрибутов призрака)
+local worldScan = {
+    prints = false, orb = nil, insc = nil, emf = 0,
+    writing = false, wither = false, laserPlaced = false,
+    minTemp = nil, minTempRoom = "?",
+    sbAnswer = "", hunting = "?", itemsCount = 0,
+    age = nil, gender = nil, curRoom = nil, favRoom = nil,
+    inLaser = false,
+}
+
 local function scanPills()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then return end
@@ -310,13 +321,13 @@ local function scanPills()
     local solver = {}
     for _, tx in ipairs(texts) do
         local low = tx:lower()
-        -- улики: строгое совпадение текста пилюли ("EMF Level 5",
-        -- "Handprints", "[Ghost Orb]" и т.п.)
+        -- улики: пилюля → только ПОДТВЕРЖДЁННАЯ (в журнале подписаны
+        -- ВСЕ улики, а не только найденные — доверять подписи нельзя)
         if #tx <= 40 then
             local key = EV_LOOKUP[normTxt(tx)]
-            if key then
+            if key and low:find("confirm") then
                 ev[key] = true
-                if low:find("confirm") then cf[key] = true end
+                cf[key] = true
             end
         end
         -- подтверждение в той же строке: "[EMF] confirmed"
@@ -336,22 +347,23 @@ local function scanPills()
             or tx:find("^No ghost matches") then
             solver[#solver + 1] = tx
         end
-        -- spirit box: возраст/пол/комнаты/температура
+        -- spirit box: возраст/пол/комнаты/температура (атрибуты призрака
+        -- надёжнее — пилюли не перетирают их)
         local sb = tx:match("^%s*%[?SPIRIT BOX%]?%s*[:%-]%s*(.+)$")
         local src = sb or tx
         local age = src:match("[Aa]ge%s*[:%-]%s*(%d+)")
-        if age then DATA.age = age end
+        if age and not worldScan.age then DATA.age = age end
         local gen = src:match("[Gg]ender%s*[:%-]%s*([%w%s]+)")
-        if gen then DATA.gender = gen:match("^%s*(.-)%s*$") end
+        if gen and not worldScan.gender then DATA.gender = gen:match("^%s*(.-)%s*$") end
         local room = src:match("Current Room%s*[:%-]%s*([^,]+)")
-        if room then DATA.room = room:match("^%s*(.-)%s*$") end
+        if room and not worldScan.curRoom then DATA.room = room:match("^%s*(.-)%s*$") end
         local fav = src:match("Favorite Room%s*[:%-]%s*(.+)")
-        if fav then DATA.favRoom = fav:match("^%s*(.-)%s*$") end
+        if fav and not worldScan.favRoom then DATA.favRoom = fav:match("^%s*(.-)%s*$") end
         local temp = src:match("Temperature%s*[:%-]%s*(-?%d+%.?%d*)")
         if temp then DATA.temperature = tonumber(temp) end
         local diff = src:match("Difficulty%s*[:%-]%s*(.+)")
         if diff then DATA.difficulty = diff:match("^%s*(.-)%s*$") end
-        if low:find("hunting") then DATA.hunting = "Hunting" end
+        if low:find("hunting") and worldScan.hunting == "?" then DATA.hunting = "Hunting" end
     end
     DATA.evidence = ev
     DATA.confirmed = cf
@@ -362,12 +374,7 @@ end
 -- ═══ СКАНЕР МИРА (реальные объекты игры, как в Demonology Pro) ═══
 -- Раз в секунду один прогон workspace:GetDescendants():
 -- улики, температура комнат, стамина-инфо, призрак, охота.
-local worldScan = {
-    prints = false, orb = nil, insc = nil, emf = 0,
-    writing = false, wither = false, laserPlaced = false,
-    minTemp = nil, minTempRoom = "?",
-    sbAnswer = "", hunting = "?", itemsCount = 0,
-}
+-- (сам worldScan объявлен выше, перед scanPills)
 local function scanWorld()
     local okW, errW = pcall(function()
         worldScan.prints = false
@@ -428,13 +435,23 @@ local function scanWorld()
                 end
             end
         end
-        -- предметы: сколько всего + лазерный проектор
+        -- предметы: сколько снаряжения + лазерный проектор
         local items = workspace:FindFirstChild("Items")
         if items then
             for _, it in ipairs(items:GetChildren()) do
-                worldScan.itemsCount = worldScan.itemsCount + 1
-                local dn = it:GetAttribute("DisplayName") or it.Name
-                if dn == "Laser Projector" then worldScan.laserPlaced = true end
+                -- снаряжение = модель с атрибутом ItemName (декор без него)
+                if it:GetAttribute("ItemName") then
+                    worldScan.itemsCount = worldScan.itemsCount + 1
+                    local nm = it:GetAttribute("ItemName")
+                    if nm == "Laser Projector" then worldScan.laserPlaced = true end
+                    if nm == "Spirit Book" and not worldScan.writing then
+                        for _, dd in ipairs(it:GetDescendants()) do
+                            if dd:IsA("Decal") and dd.Texture ~= nil and dd.Texture ~= "" then
+                                worldScan.writing = true
+                            end
+                        end
+                    end
+                end
                 if it.Name == "Petals" then
                     for _, pp in ipairs(it:GetDescendants()) do
                         if pp:IsA("BasePart") and pp.Name == "Petals" then
@@ -447,6 +464,22 @@ local function scanWorld()
                 end
             end
         end
+        -- атрибуты призрака — игра отдаёт их сама, надёжнее любых пилюль
+        local g = workspace:FindFirstChild("Ghost")
+        if g then
+            worldScan.hunting = (g:GetAttribute("Hunting") == true) and "ОХОТА!" or "спокоен"
+            worldScan.age = g:GetAttribute("Age")
+            worldScan.gender = g:GetAttribute("Gender")
+            worldScan.curRoom = g:GetAttribute("CurrentRoom")
+            worldScan.favRoom = g:GetAttribute("FavoriteRoom")
+            worldScan.inLaser = g:GetAttribute("InLaser") == true
+            if worldScan.age then DATA.age = tostring(worldScan.age) end
+            if worldScan.gender then DATA.gender = tostring(worldScan.gender) end
+            if worldScan.curRoom then DATA.room = tostring(worldScan.curRoom) end
+            if worldScan.favRoom then DATA.favRoom = tostring(worldScan.favRoom) end
+        else
+            worldScan.hunting = "?"
+        end
         -- Spirit Box: субтитры с ответом призрака
         pcall(function()
             local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -455,16 +488,13 @@ local function scanWorld()
             local tl = holder and holder:FindFirstChildWhichIsA("TextLabel")
             worldScan.sbAnswer = (tl and tl.Text or "")
         end)
-        -- призрак: охота?
-        local g = workspace:FindFirstChild("Ghost")
-        worldScan.hunting = (g and g:GetAttribute("Hunting") == true) and "ОХОТА!" or (g and "спокоен" or "?")
     end)
     if not okW then warn("[DHL] worldScan error: " .. tostring(errW)) end
 end
 
 -- перенос найденных улик в DATA (только добавление — улики не исчезают)
-local function applyWorldEvidence()
-    if not CFG.EvidenceWatch then return end
+local function applyWorldEvidence(force)
+    if not CFG.EvidenceWatch and not force then return end
     local E = DATA.evidence
     local added = false
     local function add(k)
@@ -477,9 +507,9 @@ local function applyWorldEvidence()
     if worldScan.wither then add("Wither") end
     if worldScan.minTemp ~= nil and worldScan.minTemp <= 0 then add("Freezing") end
     if #worldScan.sbAnswer:gsub("%s+", "") >= 3 then add("SB") end
+    if worldScan.inLaser then add("Laser") end
     if added then
         DATA.lastUpdate = os.clock()
-        DATA.solverLines = solverLines()
     end
 end
 
@@ -487,7 +517,7 @@ end
 local function buildReport()
     scanPills() -- форс-скан прямо по нажатию
     scanWorld()
-    applyWorldEvidence()
+    applyWorldEvidence(true) -- форс даже при выключенном тоггле улик
     local L = {}
     L[#L + 1] = "── УЛИКИ ──"
     local found = 0
@@ -626,7 +656,7 @@ local function evText()
     end
     if found == 0 then lines[#lines + 1] = "улик пока нет" end
     lines[#lines + 1] = ""
-    for _, s in ipairs(DATA.solverLines) do
+    for _, s in ipairs(solverLines()) do
         lines[#lines + 1] = s
     end
     return table.concat(lines, "\n")
@@ -637,15 +667,15 @@ local function giText()
     if worldScan.minTemp ~= nil and (t == nil or worldScan.minTemp < t) then
         t = worldScan.minTemp
         DATA.temperature = t
-        DATA.room = worldScan.minTempRoom
     end
     if worldScan.hunting ~= "?" then DATA.hunting = worldScan.hunting end
     local lines = {
         "Возраст: " .. DATA.age,
         "Пол: " .. DATA.gender,
-        "Комната (холодная): " .. DATA.room,
+        "Комната призрака: " .. DATA.room,
         "Любимая комната: " .. DATA.favRoom,
-        "Температура: " .. (t and string.format("%.1f", t) or "n/a"),
+        "Самая холодная: " .. worldScan.minTempRoom
+            .. (t ~= nil and " (" .. string.format("%.1f", t) .. "°)" or ""),
         "Сложность: " .. DATA.difficulty,
         "Состояние: " .. DATA.hunting,
     }
@@ -655,11 +685,13 @@ local function giText()
     if worldScan.emf > 0 then
         lines[#lines + 1] = "EMF сейчас: " .. worldScan.emf
     end
-    if worldScan.laserPlaced then
+    if worldScan.inLaser then
+        lines[#lines + 1] = "Лазер: призрак в луче!"
+    elseif worldScan.laserPlaced then
         lines[#lines + 1] = "Лазер: поставлен"
     end
     if worldScan.itemsCount > 0 then
-        lines[#lines + 1] = "Предметов: " .. worldScan.itemsCount
+        lines[#lines + 1] = "Снаряжения: " .. worldScan.itemsCount
     end
     return table.concat(lines, "\n")
 end
@@ -780,11 +812,11 @@ local function espLoop()
         end
         if CFG.HandprintsESP then
             -- каждая часть из папки Handprints отдельно (Highlight на
-            -- папку не рендерится)
+            -- папку не рендерится), части могут лежать глубже
             local hp = workspace:FindFirstChild("Handprints")
             if hp then
-                for _, part in ipairs(hp:GetChildren()) do
-                    if part and part.Parent then
+                for _, part in ipairs(hp:GetDescendants()) do
+                    if part and part.Parent and part:IsA("BasePart") then
                         espAttach(part, "🖐 Handprint", Color3.fromRGB(255, 170, 80), true)
                     end
                 end
@@ -808,21 +840,14 @@ local function espLoop()
             end
         end
         if CFG.ItemESP then
-            -- предметы лежат в workspace.Items и workspace.Interactables
+            -- ТОЛЬКО снаряжение: в workspace.Items это модели с атрибутом
+            -- ItemName (чипсы/стулья/декор без него — не показываем)
             local items = workspace:FindFirstChild("Items")
             if items then
                 for _, it in ipairs(items:GetChildren()) do
-                    if it and it.Parent then
-                        local dn = it:GetAttribute("DisplayName")
-                        espAttach(it, "📦 " .. (dn or it.Name), Color3.fromRGB(90, 230, 130), true)
-                    end
-                end
-            end
-            local inter = workspace:FindFirstChild("Interactables")
-            if inter then
-                for _, it in ipairs(inter:GetChildren()) do
-                    if it and it.Parent then
-                        espAttach(it, "✳ " .. it.Name, Color3.fromRGB(230, 210, 90), true)
+                    local nm = it and it.Parent and it:GetAttribute("ItemName")
+                    if nm then
+                        espAttach(it, "📦 " .. tostring(nm), Color3.fromRGB(90, 230, 130), true)
                     end
                 end
             end
@@ -1215,7 +1240,7 @@ local function buildWindUI()
     safe(function()
         return TabESP:Toggle({
             Title = "📦 Item ESP",
-            Desc = "workspace.Items + Interactables",
+            Desc = "Только снаряжение (workspace.Items, атрибут ItemName) — без декора",
             Value = false,
             Callback = function(v) ACTIONS.ItemESP(v) end,
         })
@@ -1234,7 +1259,7 @@ local function buildWindUI()
     safe(function()
         return TabGhost:Paragraph({
             Title = "Как работает",
-            Desc = "Задавай вопросы через Spirit Box в игре — ответы появятся в панели GHOST INFO. Температура ниже 0 = Freezing Temps.",
+            Desc = "Возраст, пол, комнаты читаются из атрибутов призрака (Age/Gender/CurrentRoom/FavoriteRoom). Улики — из мира: принты, орб, надписи, температура, EMF, субтитры Spirit Box, лазер. В журнале доверяем только подтверждённым уликам.",
         })
     end, "Paragraph Как работает")
     safe(function()
