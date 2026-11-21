@@ -1,62 +1,87 @@
 -- ═══════════════════════════════════════════════════════════════
---  DEMONOLOGY HELPER v1.0 (порт фич DemonologyX)
---  Меню: Wind UI (как в Crows Lite для MM2)
---  Фичи: авто-чтение улик из журнала + солвер-зеркало, Ghost/Orb/
---  Handprints/ScratchText/Item ESP, Ghost Info (парс Spirit Box),
+--  CROWS HUB | DEMONOLOGY v1.1
+--  Меню: Wind UI (как в Crows Lite для MM2) + резервный встроенный
+--  GUI, если Wind UI не загрузился (меню появляется ВСЕГДА).
+--  Фичи: кнопка «Проверить улики» (улики + запись журнала + решение:
+--  точный призрак или возможные по матрице), сканер журнала,
+--  Ghost/Orb/Handprints/Scratch/Item ESP, Ghost Info (Spirit Box),
 --  Fullbright, инф-стамина, скорость, FOV 30-250.
---  Кнопка открытия меню — прямоугольная, Right Shift — тоггл меню.
+--  Кнопка открытия — прямоугольная «Crows Hub», Right Shift — меню.
 -- ═══════════════════════════════════════════════════════════════
+print("[DHL] START — Crows Hub Demonology v1.1")
 
--- ═══ WIND UI LOADER (как в Crows Lite) ═══
+-- глушим старый инстанс, если перезапускаешь скрипт
+getgenv().DHL_RUN = false
+pcall(function()
+    if getgenv().DHL_Window and getgenv().DHL_Window.Destroy then
+        getgenv().DHL_Window:Destroy()
+    end
+end)
+getgenv().DHL_Window = nil
+pcall(function()
+    local old = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("DHL_Panel")
+    if old then old:Destroy() end
+end)
+pcall(function()
+    local old = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("DHL_Fallback")
+    if old then old:Destroy() end
+end)
+task.wait(0.2)
+
+-- ═══ WIND UI LOADER (2 зеркала × 3 попытки) ═══
+-- ВАЖНО: внутри Wind UI иконки грузятся с GitHub без pcall — любой
+-- сбой сети убивает всю либу, поэтому зеркал несколько и есть
+-- резервный GUI ниже.
+local WINDUI_SOURCES = {
+    "https://raw.githubusercontent.com/KevinScripts2024/Gkfkfkdlwsk/refs/heads/main/wind%20(1).txt",
+    "https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua",
+}
 local WindUI = nil
 for attempt = 1, 3 do
-    local ok, src = pcall(function()
-        return game:HttpGet("https://raw.githubusercontent.com/KevinScripts2024/Gkfkfkdlwsk/refs/heads/main/wind%20(1).txt")
-    end)
-    if ok and type(src) == "string" and #src > 1000 then
-        local chunk = loadstring(src)
-        if chunk then
-            local ok2, res = pcall(chunk)
-            if ok2 and type(res) == "table" and type(res.CreateWindow) == "function" then
-                WindUI = res
-                print("[DHL] Wind UI OK, попытка " .. attempt)
-                break
+    for _, url in ipairs(WINDUI_SOURCES) do
+        if WindUI then break end
+        local ok, src = pcall(function()
+            return game:HttpGet(url)
+        end)
+        if ok and type(src) == "string" and #src > 1000 then
+            local chunk = loadstring(src)
+            if chunk then
+                local ok2, res = pcall(chunk)
+                if ok2 and type(res) == "table" and type(res.CreateWindow) == "function" then
+                    WindUI = res
+                    print("[DHL] Wind UI OK (попытка " .. attempt .. "): " .. url)
+                    break
+                end
             end
         end
+        warn("[DHL] источник не загрузился (попытка " .. attempt .. "): " .. url)
     end
-    warn("[DHL] GUI попытка " .. attempt .. " не удалась, повтор...")
+    if WindUI then break end
     task.wait(2)
 end
-if not WindUI then
-    warn("[DHL] Wind UI не загрузился за 3 попытки")
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "Demonology Helper",
-            Text = "GUI не загрузился — проверь интернет и запусти ещё раз",
-            Duration = 8,
-        })
-    end)
-    return
-end
-getgenv().DHL_RUN = true
 
 -- ═══ SERVICES ═══
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
-local TweenService = game:GetService("TweenService")
 local CollectionService = game:GetService("CollectionService")
-local CoreGui = game:GetService("CoreGui")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
--- ═══ UTILS ═══
 local function Notify(t, c, d)
-    pcall(function()
-        WindUI:Notify({ Title = t or "Demonology Helper", Content = c or "", Duration = d or 3 })
-    end)
+    if WindUI then
+        pcall(function()
+            WindUI:Notify({ Title = t or "Crows Hub", Content = c or "", Duration = tonumber(d) or 3 })
+        end)
+    else
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = t or "Crows Hub",
+                Text = c or "",
+                Duration = tonumber(d) or 3,
+            })
+        end)
+    end
 end
 local function getChar(p) return p and p.Character end
 local function getHum(c) return c and c:FindFirstChildOfClass("Humanoid") end
@@ -81,8 +106,8 @@ local CFG = {
 
 -- данные, собранные сканером
 local DATA = {
-    evidence = {},     -- [тип] = true
-    confirmed = {},    -- [тип] = true (подтверждённые)
+    evidence = {},     -- [ключ улики] = true
+    confirmed = {},    -- [ключ улики] = true (журнал подтвердил)
     solverLines = {},  -- строки солвера из журнала ("Confirmed: ...", "Possible: ...")
     age = "?",
     gender = "?",
@@ -94,95 +119,237 @@ local DATA = {
     lastUpdate = 0,
 }
 
--- известные типы улик (взятые из оригинального DemonologyX)
-local EVIDENCE_PATTERNS = {
-    { key = "EMF",           pat = "^%s*%[?EMF%]?[%s:%-]*" },
-    { key = "Spirit Box",    pat = "^%s*%[?SPIRIT BOX%]?[%s:%-]*" },
-    { key = "Freezing Temps",pat = "^%s*%[?FREEZING TEMPS%]?[%s:%-]*" },
-    { key = "Handprints",    pat = "^%s*%[?HANDPRINTS%]?[%s:%-]*" },
-    { key = "Ghost Orb",     pat = "^%s*%[?GHOST ORB%]?[%s:%-]*" },
-    { key = "Ghost Writing", pat = "^%s*%[?GHOST WRITING%]?[%s:%-]*" },
-    { key = "LIDAR",         pat = "^%s*%[?LIDA?R%]?[%s:%-]*" },
-    { key = "Inscription",   pat = "^%s*%[?INSCRIPTION%]?[%s:%-]*" },
-    { key = "Dirt",          pat = "^%s*%[?DIRT%]?[%s:%-]*" },
-    { key = "Flower",        pat = "^%s*%[?FLOWER%]?[%s:%-]*" },
+-- ═══ УЛИКИ + МАТРИЦА ПРИЗРАКОВ (порт из оригинального DemonologyX) ═══
+-- канонические ключи улик и как они подписаны в журнале игры
+local EVIDENCE_DEFS = {
+    { key = "EMF",         label = "EMF Level 5",     pats = { "EMF LEVEL 5", "EMF" } },
+    { key = "SB",          label = "Spirit Box",      pats = { "SPIRIT BOX" } },
+    { key = "Freezing",    label = "Freezing Temps",  pats = { "FREEZING TEMPS", "FREEZING" } },
+    { key = "Prints",      label = "Handprints",      pats = { "HANDPRINTS", "PRINTS" } },
+    { key = "Orb",         label = "Ghost Orb",       pats = { "GHOST ORB" } },
+    { key = "Inscription", label = "Inscription",     pats = { "INSCRIPTION" } },
+    { key = "Wither",      label = "Wither",          pats = { "WITHER" } },
+    { key = "Laser",       label = "Laser Projector", pats = { "LASER PROJECTOR" } },
 }
--- известные призраки (имена из оригинального скрипта)
-local GHOST_NAMES = {
-    "Aswang", "Wretch", "Marrow", "Abaddon", "Rattle", "Wither", "Vesper",
-    "Vex", "Keres", "Sire", "Oni", "Demon", "Dybbuk", "Phantom", "Revenant",
-    "Banshee", "Wraith", "Specter", "Ghoul", "Leviathan", "Ravager",
-    "Dullahan", "Umbra", "Leech", "Watcher", "Doppelganger",
-}
-local GHOST_LOWER = {}
-for _, n in ipairs(GHOST_NAMES) do GHOST_LOWER[n:lower()] = n end
-
--- ═══ ОКНО WIND UI ═══
-local Window = nil
-local okWin = pcall(function()
-    Window = WindUI:CreateWindow({
-        Title = "Demonology Helper",
-        Author = "Demonology • порт фич DemonologyX v1.0",
-        Icon = "ghost",
-        Folder = "DemonologyHelper",
-        Size = UDim2.fromOffset(560, 380),
-        ToggleKey = Enum.KeyCode.RightShift,
-        SideBarWidth = 155,
-    })
-end)
-if not okWin or not Window then
-    warn("[DHL] CreateWindow с иконкой упал — пробую без иконки")
-    Window = WindUI:CreateWindow({
-        Title = "Demonology Helper",
-        Author = "Demonology • порт DemonologyX v1.0",
-        Folder = "DemonologyHelper",
-        Size = UDim2.fromOffset(560, 380),
-        ToggleKey = Enum.KeyCode.RightShift,
-        SideBarWidth = 155,
-    })
+-- нормализация текста пилюли: только заглавные буквы
+-- (ВАЖНО: вырезаем НЕ-буквы — [^%a]; инверсия [^%A] вырезала бы буквы)
+local function normTxt(s)
+    return (s:upper():gsub("[^%a]", ""))
 end
-getgenv().DHL_Window = Window
 
--- ПРЯМОУГОЛЬНАЯ кнопка открытия меню (CornerRadius 0,8 — не круг)
-pcall(function()
-    Window:EditOpenButton({
-        Title = "Demonology Helper",
-        Enabled = true,
-        Draggable = true,
-        OnlyMobile = false,
-        CornerRadius = UDim.new(0, 8),
-        StrokeThickness = 2,
-    })
-end)
-pcall(function() Window:SetToggleKey(Enum.KeyCode.RightShift) end)
-
-local TabEvidence = Window:Tab({ Title = "Улики", Icon = "search", Desc = "Чтение журнала и солвер" })
-local TabESP = Window:Tab({ Title = "ESP", Icon = "eye", Desc = "Призрак, орб, предметы" })
-local TabGhost = Window:Tab({ Title = "Призрак", Icon = "ghost", Desc = "Ghost Info из Spirit Box" })
-local TabChar = Window:Tab({ Title = "Персонаж", Icon = "user", Desc = "Стамина, скорость, FOV" })
-local TabVis = Window:Tab({ Title = "Визуал", Icon = "sun", Desc = "Fullbright и прочее" })
-
--- ═══ ПОЛЬЗОВАТЕЛЬСКАЯ ПАНЕЛЬ (улики + Ghost Info) ═══
--- Wind UI не умеет обновлять Paragraph на лету, поэтому панель рисуем сами
-local panelGui, evFrame, ghostFrame = nil, nil, nil
-local function panelSet(frame, text)
-    if frame and frame.Parent then
-        local lbl = frame:FindFirstChild("Body")
-        if lbl then lbl.Text = text end
+-- текст -> канонический ключ (строгое совпадение после нормализации)
+local EV_LOOKUP = {}
+for _, e in ipairs(EVIDENCE_DEFS) do
+    for _, p in ipairs(e.pats) do
+        EV_LOOKUP[p] = e.key            -- совпадение с пробелами
+        EV_LOOKUP[normTxt(p)] = e.key   -- строгое (пробелы вырезаны)
     end
 end
+-- метка по ключу
+local EV_LABEL = {}
+for _, e in ipairs(EVIDENCE_DEFS) do EV_LABEL[e.key] = e.label end
 
+-- МАТРИЦА: 25 призраков × 3 улики — раскодировано из деобфнутого
+-- DemonologyX (порядок и состав улик 1:1 с оригиналом)
+local GHOST_MATRIX = {
+    Aswang         = { "EMF", "Inscription", "Wither" },
+    Banshee        = { "Freezing", "Orb", "Prints" },
+    Demon          = { "EMF", "Freezing", "Prints" },
+    Doppelgangers  = { "Freezing", "Inscription", "SB" },
+    Dullahan       = { "Freezing", "Laser", "Wither" },
+    Dybbuk         = { "Freezing", "Prints", "Wither" },
+    Entity         = { "Prints", "Laser", "SB" },
+    Ghoul          = { "Freezing", "Orb", "SB" },
+    Keres          = { "Prints", "SB", "Wither" },
+    Leviathan      = { "Inscription", "Prints", "Orb" },
+    Nightmare      = { "EMF", "Orb", "SB" },
+    Oni            = { "Freezing", "Laser", "SB" },
+    Phantom        = { "EMF", "Prints", "Orb" },
+    Ravager        = { "EMF", "Inscription", "SB" },
+    Revenant       = { "EMF", "Freezing", "Inscription" },
+    Shadow         = { "EMF", "Inscription", "Laser" },
+    Siren          = { "EMF", "SB", "Wither" },
+    Specter        = { "EMF", "Freezing", "Laser" },
+    Spirit         = { "Inscription", "Prints", "SB" },
+    Umbra          = { "Prints", "Orb", "Laser" },
+    Vesper         = { "Inscription", "Prints", "Wither" },
+    Vex            = { "Freezing", "Orb", "Wither" },
+    ["The Wisp"]   = { "Orb", "Laser", "Wither" },
+    Wraith         = { "EMF", "Laser", "SB" },
+    Wretch         = { "Inscription", "Orb", "Laser" },
+}
+-- имена призраков для ESP (все из матрицы)
+local GHOST_LOWER = {}
+for n in pairs(GHOST_MATRIX) do GHOST_LOWER[n:lower()] = n end
+
+-- ═══ СОЛВЕР (порт логики DemonologyX) ═══
+-- Возвращает строки: точный призрак / возможные / близкие (1 улика
+-- может быть фейк) / предупреждение про фейк-орб на 4 уликах.
+local function solverLines()
+    local E = {}
+    local n = 0
+    for k in pairs(DATA.evidence) do
+        E[k] = true
+        n = n + 1
+    end
+    if n == 0 then return { "улик пока нет — открой журнал в игре" } end
+
+    local lines = {}
+    local Ematch = E
+    -- 4 улики → Ghost Orb фейк (только Doppelgangers умеют подделывать орб)
+    if n >= 4 and E.Orb then
+        lines[#lines + 1] = "4 улики → Ghost Orb ФЕЙК (только Doppelgangers подделывают орб)"
+        Ematch = {}
+        for k in pairs(E) do
+            if k ~= "Orb" then Ematch[k] = true end
+        end
+    end
+
+    local exact, close = {}, {}
+    for name, set in pairs(GHOST_MATRIX) do
+        local hit, miss = 0, 0
+        for _, k in ipairs(set) do
+            if Ematch[k] then hit = hit + 1 else miss = miss + 1 end
+        end
+        if miss == 0 then
+            exact[#exact + 1] = name
+        elseif hit == 2 and miss == 1 then
+            close[#close + 1] = name
+        end
+    end
+    table.sort(exact)
+    table.sort(close)
+
+    if #exact == 1 then
+        lines[#lines + 1] = "Точный призрак: " .. exact[1]
+    elseif #exact > 1 then
+        lines[#lines + 1] = "Возможные (" .. #exact .. "): " .. table.concat(exact, ", ")
+    end
+    if #close > 0 then
+        lines[#lines + 1] = "Близкие (1 улика может быть фейк): " .. table.concat(close, ", ")
+    end
+    if #exact == 0 and #close == 0 then
+        lines[#lines + 1] = "Совпадений нет — собери больше улик"
+    end
+    return lines
+end
+
+-- ═══ СКАНЕР ЖУРНАЛА ═══
+local function scanGui(root)
+    local texts = {}
+    for _, d in ipairs(root:GetDescendants()) do
+        if d:IsA("TextLabel") or d:IsA("TextBox") then
+            local tx = d.Text
+            if tx and #tx > 0 and #tx < 400 then
+                texts[#texts + 1] = tx
+            end
+        end
+    end
+    return texts
+end
+
+local function scanPills()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local texts = scanGui(pg)
+    local ev, cf = {}, {}
+    local solver = {}
+    for _, tx in ipairs(texts) do
+        local low = tx:lower()
+        -- улики: строгое совпадение текста пилюли ("EMF Level 5",
+        -- "Handprints", "[Ghost Orb]" и т.п.)
+        if #tx <= 40 then
+            local key = EV_LOOKUP[normTxt(tx)]
+            if key then
+                ev[key] = true
+                if low:find("confirm") then cf[key] = true end
+            end
+        end
+        -- подтверждение в той же строке: "[EMF] confirmed"
+        if low:find("confirm") then
+            for _, e in ipairs(EVIDENCE_DEFS) do
+                for _, p in ipairs(e.pats) do
+                    if tx:upper():find(p, 1, true) then
+                        ev[e.key] = true
+                        cf[e.key] = true
+                    end
+                end
+            end
+        end
+        -- солвер: копируем вывод журнала целиком
+        if tx:find("^Confirmed: ") or tx:find("^Possible: ")
+            or tx:find("^Close %(1 evidence may be fake%): ")
+            or tx:find("^No ghost matches") then
+            solver[#solver + 1] = tx
+        end
+        -- spirit box: возраст/пол/комнаты/температура
+        local sb = tx:match("^%s*%[?SPIRIT BOX%]?%s*[:%-]%s*(.+)$")
+        local src = sb or tx
+        local age = src:match("[Aa]ge%s*[:%-]%s*(%d+)")
+        if age then DATA.age = age end
+        local gen = src:match("[Gg]ender%s*[:%-]%s*([%w%s]+)")
+        if gen then DATA.gender = gen:match("^%s*(.-)%s*$") end
+        local room = src:match("Current Room%s*[:%-]%s*([^,]+)")
+        if room then DATA.room = room:match("^%s*(.-)%s*$") end
+        local fav = src:match("Favorite Room%s*[:%-]%s*(.+)")
+        if fav then DATA.favRoom = fav:match("^%s*(.-)%s*$") end
+        local temp = src:match("Temperature%s*[:%-]%s*(-?%d+%.?%d*)")
+        if temp then DATA.temperature = tonumber(temp) end
+        local diff = src:match("Difficulty%s*[:%-]%s*(.+)")
+        if diff then DATA.difficulty = diff:match("^%s*(.-)%s*$") end
+        if low:find("hunting") then DATA.hunting = "Hunting" end
+    end
+    DATA.evidence = ev
+    DATA.confirmed = cf
+    DATA.solverLines = solver
+    DATA.lastUpdate = os.clock()
+end
+
+-- ═══ ОТЧЁТ «ПРОВЕРИТЬ УЛИКИ» (улики + журнал + решение + статус) ═══
+local function buildReport()
+    scanPills() -- форс-скан прямо по нажатию
+    local L = {}
+    L[#L + 1] = "── УЛИКИ ──"
+    local found = 0
+    for _, e in ipairs(EVIDENCE_DEFS) do
+        if DATA.evidence[e.key] then
+            found = found + 1
+            L[#L + 1] = (DATA.confirmed[e.key] and "✔ " or "• ") .. e.label
+        end
+    end
+    if found == 0 then L[#L + 1] = "пока ничего — открой журнал в игре" end
+
+    L[#L + 1] = ""
+    L[#L + 1] = "── ЗАПИСЬ ЖУРНАЛА ──"
+    if #DATA.solverLines > 0 then
+        for _, s in ipairs(DATA.solverLines) do L[#L + 1] = s end
+    else
+        L[#L + 1] = "журнал не дал строк солвера"
+    end
+
+    L[#L + 1] = ""
+    L[#L + 1] = "── РЕШЕНИЕ ──"
+    for _, s in ipairs(solverLines()) do L[#L + 1] = s end
+
+    L[#L + 1] = ""
+    local t = DATA.temperature
+    L[#L + 1] = "Статус: " .. DATA.hunting .. " • Возраст: " .. DATA.age
+        .. " • T: " .. (t and string.format("%.1f", t) or "n/a")
+    return table.concat(L, "\n")
+end
+
+-- ═══ ПАНЕЛЬ-ОВЕРЛЕЙ (улики + Ghost Info поверх экрана) ═══
+local panelGui, evFrame, ghostFrame = nil, nil, nil
 local function buildPanel()
     if panelGui and panelGui.Parent then return end
     local ok = pcall(function()
-        local pg = gethui and gethui() or CoreGui
+        local pg = gethui and gethui() or game:GetService("CoreGui")
         panelGui = Instance.new("ScreenGui")
         panelGui.Name = "DHL_Panel"
         panelGui.ResetOnSpawn = false
         panelGui.DisplayOrder = 999
         panelGui.Parent = pg
 
-        -- блок улик/солвера
         evFrame = Instance.new("Frame")
         evFrame.Name = "Evidence"
         evFrame.Size = UDim2.fromOffset(260, 150)
@@ -216,7 +383,6 @@ local function buildPanel()
         evBody.Text = "сканер выключен"
         evBody.Parent = evFrame
 
-        -- блок Ghost Info
         ghostFrame = Instance.new("Frame")
         ghostFrame.Name = "GhostInfo"
         ghostFrame.Size = UDim2.fromOffset(260, 150)
@@ -262,13 +428,20 @@ local function panelVisible(on)
     end
 end
 
+local function panelSet(frame, text)
+    if frame and frame.Parent then
+        local lbl = frame:FindFirstChild("Body")
+        if lbl then lbl.Text = text end
+    end
+end
+
 local function evText()
     local lines = {}
     local found = 0
-    for _, e in ipairs(EVIDENCE_PATTERNS) do
+    for _, e in ipairs(EVIDENCE_DEFS) do
         if DATA.evidence[e.key] then
             found = found + 1
-            lines[#lines + 1] = (DATA.confirmed[e.key] and "✔ " or "• ") .. e.key
+            lines[#lines + 1] = (DATA.confirmed[e.key] and "✔ " or "• ") .. e.label
         end
     end
     if found == 0 then lines[#lines + 1] = "улик пока нет" end
@@ -291,65 +464,6 @@ local function giText()
         "Состояние: " .. DATA.hunting,
     }
     return table.concat(lines, "\n")
-end
-
--- ═══ СКАНЕР ЖУРНАЛА (pills) ═══
-local function scanGui(root)
-    -- собираем тексты всех TextLabel/TextBox в PlayerGui
-    local texts = {}
-    for _, d in ipairs(root:GetDescendants()) do
-        if d:IsA("TextLabel") or d:IsA("TextBox") then
-            local tx = d.Text
-            if tx and #tx > 0 and #tx < 400 then
-                texts[#texts + 1] = tx
-            end
-        end
-    end
-    return texts
-end
-
-local function scanPills()
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then return end
-    local texts = scanGui(pg)
-    local ev, cf = {}, {}
-    local solver = {}
-    for _, tx in ipairs(texts) do
-        local low = tx:lower()
-        -- улики: "[EMF] ...", "EMF: ..." и т.п. (короткие подписи-пилюли)
-        for _, e in ipairs(EVIDENCE_PATTERNS) do
-            if #tx <= 200 and tx:match(e.pat) then
-                ev[e.key] = true
-                if low:find("confirm") then cf[e.key] = true end
-            end
-        end
-        -- солвер: копируем вывод журнала целиком
-        if tx:find("^Confirmed: ") or tx:find("^Possible: ")
-            or tx:find("^Close %(1 evidence may be fake%): ")
-            or tx:find("^No ghost matches") then
-            solver[#solver + 1] = tx
-        end
-        -- spirit box: возраст/пол/комнаты/температура
-        local sb = tx:match("^%s*%[?SPIRIT BOX%]?%s*[:%-]%s*(.+)$")
-        local src = sb or tx
-        local age = src:match("[Aa]ge%s*[:%-]%s*(%d+)")
-        if age then DATA.age = age end
-        local gen = src:match("[Gg]ender%s*[:%-]%s*([%w%s]+)")
-        if gen then DATA.gender = gen:match("^%s*(.-)%s*$") end
-        local room = src:match("Current Room%s*[:%-]%s*([^,]+)")
-        if room then DATA.room = room:match("^%s*(.-)%s*$") end
-        local fav = src:match("Favorite Room%s*[:%-]%s*(.+)")
-        if fav then DATA.favRoom = fav:match("^%s*(.-)%s*$") end
-        local temp = src:match("Temperature%s*[:%-]%s*(-?%d+%.?%d*)")
-        if temp then DATA.temperature = tonumber(temp) end
-        local diff = src:match("Difficulty%s*[:%-]%s*(.+)")
-        if diff then DATA.difficulty = diff:match("^%s*(.-)%s*$") end
-        if low:find("hunting") then DATA.hunting = "Hunting" end
-    end
-    DATA.evidence = ev
-    DATA.confirmed = cf
-    DATA.solverLines = solver
-    DATA.lastUpdate = os.clock()
 end
 
 -- ═══ ESP ═══
@@ -408,7 +522,6 @@ local function espAttach(obj, text, color, showDist)
         end)
         espObjects[obj] = set
     end
-    -- обновляем подпись (дистанция)
     local hrp = getHRP(getChar(LocalPlayer))
     if set.billboard and hrp then
         local base = set.billboard.Adornee
@@ -423,7 +536,6 @@ local function espAttach(obj, text, color, showDist)
 end
 
 local function findGhostModel()
-    -- призрак: Model в workspace, имя = имя призрака (или Entity/Doppelganger)
     for _, d in ipairs(workspace:GetChildren()) do
         if d:IsA("Model") then
             local nm = d.Name:lower()
@@ -432,7 +544,6 @@ local function findGhostModel()
             end
         end
     end
-    -- запасной вариант: в под-папках
     for _, d in ipairs(workspace:GetDescendants()) do
         if d:IsA("Model") then
             local nm = d.Name:lower()
@@ -446,25 +557,20 @@ end
 
 local function espLoop()
     pcall(function()
-        -- чистим мёртвые
         for obj in pairs(espObjects) do
             if not obj.Parent then espObjects[obj] = nil end
         end
         local hrp = getHRP(getChar(LocalPlayer))
+        if hrp == nil then return end
 
-        -- Ghost ESP
         if CFG.GhostESP then
             local g = findGhostModel()
             if g then espAttach(g, "👻 " .. g.Name, Color3.fromRGB(255, 64, 64), true) end
         end
-
-        -- Ghost Orb
         if CFG.OrbESP then
             local orb = workspace:FindFirstChild("GhostOrb") or workspace:FindFirstChild("GhostOrb", true)
             if orb then espAttach(orb, "🔮 Ghost Orb", Color3.fromRGB(170, 120, 255), true) end
         end
-
-        -- Handprints / ScratchText
         if CFG.HandprintsESP then
             local hp = workspace:FindFirstChild("Handprints") or workspace:FindFirstChild("Handprints", true)
             if hp then espAttach(hp, "🖐 Handprints", Color3.fromRGB(255, 170, 80), true) end
@@ -473,15 +579,12 @@ local function espLoop()
             local sc = workspace:FindFirstChild("ScratchText") or workspace:FindFirstChild("ScratchText", true)
             if sc then espAttach(sc, "🐾 Scratch", Color3.fromRGB(120, 255, 160), true) end
         end
-
-        -- Item ESP: все объекты с тегом interactables
         if CFG.ItemESP then
             local okT, tagged = pcall(function() return CollectionService:GetTagged("interactables") end)
             if okT and tagged then
                 for _, it in ipairs(tagged) do
                     if it and it.Parent then
-                        local nm = it.Name
-                        espAttach(it, "📦 " .. nm, Color3.fromRGB(90, 230, 130), true)
+                        espAttach(it, "📦 " .. it.Name, Color3.fromRGB(90, 230, 130), true)
                     end
                 end
             end
@@ -509,7 +612,6 @@ local function fullbrightApply()
             Lighting.FogEnd = 1e5
             Lighting.GlobalShadows = false
         elseif CFG.SunFullbright then
-            -- мягкий вариант: только яркость солнца, тени остаются
             Lighting.Brightness = 3
             Lighting.FogEnd = 1e5
             Lighting.OutdoorAmbient = Color3.fromRGB(140, 140, 150)
@@ -524,7 +626,7 @@ local function fullbrightApply()
     end)
 end
 
--- ═══ СКОРОСТЬ / FOV ═══
+-- ═══ СКОРОСТЬ / FOV / СТАМИНА ═══
 local function speedApply()
     pcall(function()
         local hum = getHum(getChar(LocalPlayer))
@@ -537,8 +639,6 @@ local function fovApply()
         if cam then cam.FieldOfView = math.clamp(CFG.FOV, 30, 250) end
     end)
 end
-
--- ═══ ИНФ СТАМИНА ═══
 local staminaMaxSeen = 0
 local function staminaTick()
     pcall(function()
@@ -546,7 +646,6 @@ local function staminaTick()
         local holders = { c, LocalPlayer }
         for _, holder in ipairs(holders) do
             if holder then
-                -- Value-объекты (Stamina/Energy)
                 for _, v in ipairs(holder:GetChildren()) do
                     if (v:IsA("NumberValue") or v:IsA("IntValue"))
                         and v.Name:lower():find("stamina") then
@@ -554,7 +653,6 @@ local function staminaTick()
                         if staminaMaxSeen > 0 then v.Value = staminaMaxSeen end
                     end
                 end
-                -- атрибуты
                 local maxAttr = holder:GetAttribute("MaxStamina") or holder:GetAttribute("maxStamina")
                 if maxAttr and holder:GetAttribute("Stamina") ~= nil then
                     if maxAttr > staminaMaxSeen then staminaMaxSeen = maxAttr end
@@ -565,27 +663,68 @@ local function staminaTick()
     end)
 end
 
+-- ═══ ОБЩИЕ ДЕЙСТВИЯ (для обоих GUI) ═══
+local ACTIONS = {}
+ACTIONS.EvidenceWatch = function(v)
+    CFG.EvidenceWatch = v
+    if v then buildPanel() end
+end
+ACTIONS.GhostESP = function(v) CFG.GhostESP = v espCleanup() end
+ACTIONS.OrbESP = function(v) CFG.OrbESP = v espCleanup() end
+ACTIONS.HandprintsESP = function(v) CFG.HandprintsESP = v espCleanup() end
+ACTIONS.ScratchESP = function(v) CFG.ScratchESP = v espCleanup() end
+ACTIONS.ItemESP = function(v) CFG.ItemESP = v espCleanup() end
+ACTIONS.GhostInfo = function(v)
+    CFG.GhostInfo = v
+    if v then buildPanel() end
+end
+ACTIONS.Fullbright = function(v) CFG.Fullbright = v fullbrightApply() end
+ACTIONS.SunFullbright = function(v) CFG.SunFullbright = v fullbrightApply() end
+ACTIONS.InfStamina = function(v) CFG.InfStamina = v end
+ACTIONS.PanelVisible = function(v)
+    CFG.PanelVisible = v
+    panelVisible(v)
+end
+ACTIONS.Speed = function(n)
+    CFG.Speed = math.clamp(n, 8, 100)
+    speedApply()
+end
+ACTIONS.FOV = function(n)
+    CFG.FOV = math.clamp(n, 30, 250)
+    fovApply()
+end
+ACTIONS.ResetData = function()
+    DATA.evidence = {}
+    DATA.confirmed = {}
+    DATA.solverLines = {}
+    DATA.age, DATA.gender, DATA.room = "?", "?", "?"
+    DATA.favRoom, DATA.temperature, DATA.difficulty = "?", nil, "?"
+    DATA.hunting = "?"
+end
+ACTIONS.ResetChar = function()
+    CFG.Speed = 16
+    CFG.FOV = 70
+    speedApply()
+    fovApply()
+end
+
 -- ═══ ЦИКЛЫ ═══
 local panelRefreshT = 0
 task.spawn(function()
     while true do
         if not getgenv().DHL_RUN then break end
         local ok, err = pcall(function()
-            -- сканер журнала
             if CFG.EvidenceWatch then
                 scanPills()
             end
-            -- ESP
             if CFG.GhostESP or CFG.OrbESP or CFG.HandprintsESP or CFG.ScratchESP or CFG.ItemESP then
                 espLoop()
             else
                 espCleanup()
             end
-            -- стамина
             if CFG.InfStamina then
                 staminaTick()
             end
-            -- панель раз в 0.4с
             if os.clock() - panelRefreshT > 0.4 then
                 panelRefreshT = os.clock()
                 panelSet(evFrame, CFG.EvidenceWatch and evText() or "сканер выключен")
@@ -598,7 +737,6 @@ task.spawn(function()
     end
 end)
 
--- скорость/FOV после респавна и периодически
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     pcall(function()
@@ -609,201 +747,597 @@ end)
 task.spawn(function()
     while true do
         if not getgenv().DHL_RUN then break end
-        pcall(speedApply) -- держим WalkSpeed каждый тик
+        pcall(speedApply)
         task.wait(1)
     end
 end)
+getgenv().DHL_RUN = true
 
--- ═══ UI: ВКЛАДКА УЛИКИ ═══
-TabEvidence:Section({ Title = "Авто-чтение улик" })
-TabEvidence:Toggle({
-    Title = "Сканировать журнал",
-    Desc = "Читает пилюли улик из журнала (EMF, Spirit Box, Freezing, Handprints, Ghost Orb, Writing, LIDAR и др.) и показывает солвер игры",
-    Value = false,
-    Callback = function(v)
-        CFG.EvidenceWatch = v
-        if v then buildPanel() end
-        Notify("Улики", v and "Сканер журнала ВКЛ" or "Сканер ВЫКЛ", 2)
-    end,
-})
-TabEvidence:Paragraph({
-    Title = "Панель улик",
-    Desc = "Панель EVIDENCE/SOLVER рисуется слева сверху. Галочка = улика подтверждена журналом. Строки Confirmed/Possible копируются из журнала игры.",
-})
-TabEvidence:Section({ Title = "Панель" })
-TabEvidence:Toggle({
-    Title = "Показывать панель",
-    Desc = "Открыть/скрыть обе панели (улики и Ghost Info)",
-    Value = true,
-    Callback = function(v)
-        CFG.PanelVisible = v
-        panelVisible(v)
-    end,
-})
-TabEvidence:Button({
-    Title = "↩ Сбросить собранные данные",
-    Desc = "Очистить улики, ответы Spirit Box и строки солвера",
-    Callback = function()
-        DATA.evidence = {}
-        DATA.confirmed = {}
-        DATA.solverLines = {}
-        DATA.age, DATA.gender, DATA.room = "?", "?", "?"
-        DATA.favRoom, DATA.temperature, DATA.difficulty = "?", nil, "?"
-        DATA.hunting = "?"
-        Notify("Улики", "Данные сброшены (новый раунд?)", 2)
-    end,
+-- ═══════════════════════════════════════════════════════════════
+--  UI A: WIND UI (безопасные обёртки — одна ошибка не валит скрипт)
+-- ═══════════════════════════════════════════════════════════════
+local dummyEl
+dummyEl = setmetatable({}, {
+    __index = function() return function() return dummyEl end end,
+    __call = function() return dummyEl end,
 })
 
--- ═══ UI: ВКЛАДКА ESP ═══
-TabESP:Section({ Title = "ESP объекты" })
-TabESP:Toggle({
-    Title = "👻 Ghost ESP",
-    Desc = "Подсветка модели призрака (по имени из списка DemonologyX)",
-    Value = false,
-    Callback = function(v) CFG.GhostESP = v espCleanup() end,
-})
-TabESP:Toggle({
-    Title = "🔮 Ghost Orb ESP",
-    Desc = "workspace.GhostOrb",
-    Value = false,
-    Callback = function(v) CFG.OrbESP = v espCleanup() end,
-})
-TabESP:Toggle({
-    Title = "🖐 Handprints ESP",
-    Desc = "workspace.Handprints",
-    Value = false,
-    Callback = function(v) CFG.HandprintsESP = v espCleanup() end,
-})
-TabESP:Toggle({
-    Title = "🐾 Scratch ESP",
-    Desc = "workspace.ScratchText (царапины)",
-    Value = false,
-    Callback = function(v) CFG.ScratchESP = v espCleanup() end,
-})
-TabESP:Toggle({
-    Title = "📦 Item ESP",
-    Desc = "Все предметы с тегом interactables",
-    Value = false,
-    Callback = function(v) CFG.ItemESP = v espCleanup() end,
-})
+local function safe(fn, what)
+    local ok, res = pcall(fn)
+    if not ok or res == nil then
+        warn("[DHL] " .. what .. ": " .. tostring(res))
+        return dummyEl
+    end
+    return res
+end
 
--- ═══ UI: ВКЛАДКА ПРИЗРАК ═══
-TabGhost:Section({ Title = "Ghost Info (из Spirit Box)" })
-TabGhost:Toggle({
-    Title = "Собирать информацию о призраке",
-    Desc = "Возраст, пол, комнаты, температура, сложность — парсится из пилюль Spirit Box журнала",
-    Value = false,
-    Callback = function(v)
-        CFG.GhostInfo = v
-        if v then buildPanel() end
-        Notify("Ghost Info", v and "Сбор информации ВКЛ" or "ВЫКЛ", 2)
-    end,
-})
-TabGhost:Paragraph({
-    Title = "Как работает",
-    Desc = "Задавай вопросы через Spirit Box в игре — ответы (Age, Gender, Room, Temperature) появятся в панели GHOST INFO. Температура ниже 0 = Freezing Temps.",
-})
+local solverPara = nil
+local UI_MODE = "none"
 
--- ═══ UI: ВКЛАДКА ПЕРСОНАЖ ═══
-TabChar:Section({ Title = "Стамина / Скорость / FOV" })
-TabChar:Toggle({
-    Title = "♾ Бесконечная стамина",
-    Desc = "Держит стамину на максимуме (значения Stamina в персонаже и атрибутах)",
-    Value = false,
-    Callback = function(v) CFG.InfStamina = v end,
-})
-TabChar:Slider({
-    Title = "Скорость",
-    Desc = "WalkSpeed персонажа",
-    Step = 1,
-    Value = { Min = 8, Max = 100, Default = 16 },
-    Callback = function(v)
-        CFG.Speed = v
-        speedApply()
-    end,
-})
-TabChar:Input({
-    Title = "Скорость (вписать)",
-    Placeholder = "число 8-100",
-    Callback = function(txt)
-        local n = tonumber((tostring(txt or ""):gsub("[^%d]", "")))
-        if n then
-            n = math.clamp(n, 8, 100)
-            CFG.Speed = n
-            speedApply()
-            Notify("Персонаж", "Скорость: " .. n, 2)
+local function buildWindUI()
+    local Window = nil
+    local okWin = pcall(function()
+        Window = WindUI:CreateWindow({
+            Title = "Crows Hub",
+            Author = "Demonology • порт DemonologyX v1.1",
+            Icon = "ghost",
+            Folder = "DemonologyHelper",
+            Size = UDim2.fromOffset(560, 380),
+            ToggleKey = Enum.KeyCode.RightShift,
+            SideBarWidth = 155,
+        })
+    end)
+    if not okWin or not Window then
+        warn("[DHL] CreateWindow с иконкой упал — пробую без иконки")
+        pcall(function()
+            Window = WindUI:CreateWindow({
+                Title = "Crows Hub",
+                Author = "Demonology • порт DemonologyX v1.1",
+                Folder = "DemonologyHelper",
+                Size = UDim2.fromOffset(560, 380),
+                ToggleKey = Enum.KeyCode.RightShift,
+                SideBarWidth = 155,
+            })
+        end)
+    end
+    if not Window then return false end
+
+    getgenv().DHL_Window = Window
+
+    -- прямоугольная кнопка открытия «Crows Hub»
+    pcall(function()
+        Window:EditOpenButton({
+            Title = "Crows Hub",
+            Enabled = true,
+            Draggable = true,
+            OnlyMobile = false,
+            CornerRadius = UDim.new(0, 8),
+            StrokeThickness = 2,
+        })
+    end)
+    pcall(function() Window:SetToggleKey(Enum.KeyCode.RightShift) end)
+
+    local TabEvidence = safe(function()
+        return Window:Tab({ Title = "Улики", Icon = "search", Desc = "Журнал, солвер, проверка" })
+    end, "Tab Улики")
+    local TabESP = safe(function()
+        return Window:Tab({ Title = "ESP", Icon = "eye", Desc = "Призрак, орб, предметы" })
+    end, "Tab ESP")
+    local TabGhost = safe(function()
+        return Window:Tab({ Title = "Призрак", Icon = "ghost", Desc = "Ghost Info из Spirit Box" })
+    end, "Tab Призрак")
+    local TabChar = safe(function()
+        return Window:Tab({ Title = "Персонаж", Icon = "user", Desc = "Стамина, скорость, FOV" })
+    end, "Tab Персонаж")
+    local TabVis = safe(function()
+        return Window:Tab({ Title = "Визуал", Icon = "sun", Desc = "Fullbright" })
+    end, "Tab Визуал")
+
+    -- ── вкладка УЛИКИ ──
+    safe(function() return TabEvidence:Section({ Title = "Проверка улик" }) end, "Section")
+    safe(function()
+        return TabEvidence:Button({
+            Title = "🔍 ПРОВЕРИТЬ УЛИКИ",
+            Desc = "Собирает улики из журнала, запись журнала и решение: точный призрак или возможные варианты",
+            Callback = function()
+                local rep = buildReport()
+                pcall(function()
+                    if solverPara and solverPara.SetContent then
+                        solverPara:SetContent(rep)
+                    end
+                end)
+                if panelGui then panelSet(evFrame, rep) end
+                Notify("Проверка улик", "Отчёт показан во вкладке «Улики»", 3)
+            end,
+        })
+    end, "Button Проверить улики")
+    solverPara = safe(function()
+        return TabEvidence:Paragraph({
+            Title = "Результат проверки",
+            Desc = "Нажми «ПРОВЕРИТЬ УЛИКИ» — здесь появится отчёт",
+        })
+    end, "Paragraph Результат")
+    safe(function()
+        return TabEvidence:Toggle({
+            Title = "Сканировать журнал (авто)",
+            Desc = "Автоматически читает улики и солвер из журнала",
+            Value = false,
+            Callback = function(v) ACTIONS.EvidenceWatch(v) end,
+        })
+    end, "Toggle Сканер")
+    safe(function()
+        return TabEvidence:Toggle({
+            Title = "Показывать панель поверх экрана",
+            Desc = "Панели EVIDENCE/SOLVER и GHOST INFO слева сверху",
+            Value = true,
+            Callback = function(v) ACTIONS.PanelVisible(v) end,
+        })
+    end, "Toggle Панель")
+    safe(function()
+        return TabEvidence:Button({
+            Title = "↩ Сбросить собранные данные",
+            Desc = "Новый раунд: очистить улики и ответы Spirit Box",
+            Callback = function()
+                ACTIONS.ResetData()
+                Notify("Улики", "Данные сброшены", 2)
+            end,
+        })
+    end, "Button Сброс данных")
+
+    -- ── вкладка ESP ──
+    safe(function() return TabESP:Section({ Title = "ESP объекты" }) end, "Section ESP")
+    safe(function()
+        return TabESP:Toggle({
+            Title = "👻 Ghost ESP",
+            Desc = "Подсветка модели призрака",
+            Value = false,
+            Callback = function(v) ACTIONS.GhostESP(v) end,
+        })
+    end, "Toggle GhostESP")
+    safe(function()
+        return TabESP:Toggle({
+            Title = "🔮 Ghost Orb ESP",
+            Desc = "workspace.GhostOrb",
+            Value = false,
+            Callback = function(v) ACTIONS.OrbESP(v) end,
+        })
+    end, "Toggle OrbESP")
+    safe(function()
+        return TabESP:Toggle({
+            Title = "🖐 Handprints ESP",
+            Desc = "workspace.Handprints",
+            Value = false,
+            Callback = function(v) ACTIONS.HandprintsESP(v) end,
+        })
+    end, "Toggle Handprints")
+    safe(function()
+        return TabESP:Toggle({
+            Title = "🐾 Scratch ESP",
+            Desc = "workspace.ScratchText (царапины)",
+            Value = false,
+            Callback = function(v) ACTIONS.ScratchESP(v) end,
+        })
+    end, "Toggle Scratch")
+    safe(function()
+        return TabESP:Toggle({
+            Title = "📦 Item ESP",
+            Desc = "Все предметы с тегом interactables",
+            Value = false,
+            Callback = function(v) ACTIONS.ItemESP(v) end,
+        })
+    end, "Toggle ItemESP")
+
+    -- ── вкладка ПРИЗРАК ──
+    safe(function() return TabGhost:Section({ Title = "Ghost Info (из Spirit Box)" }) end, "Section Ghost")
+    safe(function()
+        return TabGhost:Toggle({
+            Title = "Собирать информацию о призраке",
+            Desc = "Возраст, пол, комнаты, температура, сложность — из пилюль Spirit Box",
+            Value = false,
+            Callback = function(v) ACTIONS.GhostInfo(v) end,
+        })
+    end, "Toggle GhostInfo")
+    safe(function()
+        return TabGhost:Paragraph({
+            Title = "Как работает",
+            Desc = "Задавай вопросы через Spirit Box в игре — ответы появятся в панели GHOST INFO. Температура ниже 0 = Freezing Temps.",
+        })
+    end, "Paragraph Как работает")
+
+    -- ── вкладка ПЕРСОНАЖ ──
+    safe(function() return TabChar:Section({ Title = "Стамина / Скорость / FOV" }) end, "Section Char")
+    safe(function()
+        return TabChar:Toggle({
+            Title = "♾ Бесконечная стамина",
+            Desc = "Держит стамину на максимуме",
+            Value = false,
+            Callback = function(v) ACTIONS.InfStamina(v) end,
+        })
+    end, "Toggle InfStamina")
+    safe(function()
+        return TabChar:Slider({
+            Title = "Скорость",
+            Desc = "WalkSpeed персонажа",
+            Step = 1,
+            Value = { Min = 8, Max = 100, Default = 16 },
+            Callback = function(v) ACTIONS.Speed(v) end,
+        })
+    end, "Slider Скорость")
+    safe(function()
+        return TabChar:Input({
+            Title = "Скорость (вписать)",
+            Placeholder = "число 8-100",
+            Callback = function(txt)
+                local n = tonumber((tostring(txt or ""):gsub("[^%d]", "")))
+                if n then
+                    ACTIONS.Speed(n)
+                    Notify("Персонаж", "Скорость: " .. math.clamp(n, 8, 100), 2)
+                end
+            end,
+        })
+    end, "Input Скорость")
+    safe(function()
+        return TabChar:Slider({
+            Title = "FOV",
+            Desc = "Поле зрения камеры 30-250",
+            Step = 1,
+            Value = { Min = 30, Max = 250, Default = 70 },
+            Callback = function(v) ACTIONS.FOV(v) end,
+        })
+    end, "Slider FOV")
+    safe(function()
+        return TabChar:Input({
+            Title = "FOV (вписать)",
+            Placeholder = "число 30-250",
+            Callback = function(txt)
+                local n = tonumber((tostring(txt or ""):gsub("[^%d]", "")))
+                if n then
+                    ACTIONS.FOV(n)
+                    Notify("Персонаж", "FOV: " .. math.clamp(n, 30, 250), 2)
+                end
+            end,
+        })
+    end, "Input FOV")
+    safe(function()
+        return TabChar:Button({
+            Title = "↩ Сброс (скорость 16, FOV 70)",
+            Callback = function()
+                ACTIONS.ResetChar()
+                Notify("Персонаж", "Скорость 16, FOV 70", 2)
+            end,
+        })
+    end, "Button Сброс персонажа")
+
+    -- ── вкладка ВИЗУАЛ ──
+    safe(function() return TabVis:Section({ Title = "Освещение" }) end, "Section Vis")
+    safe(function()
+        return TabVis:Toggle({
+            Title = "Fullbright",
+            Desc = "Полная яркость: без тумана и теней",
+            Value = false,
+            Callback = function(v) ACTIONS.Fullbright(v) end,
+        })
+    end, "Toggle Fullbright")
+    safe(function()
+        return TabVis:Toggle({
+            Title = "Sun Bright Fullbright (мягкий)",
+            Desc = "Только яркость солнца, мрак в комнатах остаётся",
+            Value = false,
+            Callback = function(v) ACTIONS.SunFullbright(v) end,
+        })
+    end, "Toggle SunFullbright")
+
+    -- авто-открытие меню: чтобы точно что-то появилось на экране
+    pcall(function()
+        if Window.Open then Window:Open() end
+    end)
+
+    -- уборка только при УНИЧТОЖЕНИИ окна (не при закрытии!)
+    pcall(function()
+        Window:OnDestroy(function()
+            getgenv().DHL_RUN = false
+            espCleanup()
+            if panelGui then panelGui:Destroy() end
+            CFG.Fullbright, CFG.SunFullbright = false, false
+            fullbrightApply()
+            ACTIONS.ResetChar()
+        end)
+    end)
+    return true
+end
+
+-- ═══════════════════════════════════════════════════════════════
+--  UI B: РЕЗЕРВНЫЙ ВСТРОЕННЫЙ GUI (работает БЕЗ Wind UI/интернета)
+--  Тоже с прямоугольной кнопкой «CROWS HUB» и «Проверить улики».
+-- ═══════════════════════════════════════════════════════════════
+local function buildFallbackGui()
+    local parent = nil
+    pcall(function()
+        if gethui then parent = gethui() end
+    end)
+    if not parent then
+        pcall(function() parent = game:GetService("CoreGui") end)
+    end
+    if not parent then
+        pcall(function()
+            parent = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("Players").LocalPlayer.PlayerGui
+        end)
+    end
+    if not parent then return false end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "DHL_Fallback"
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 1000
+    gui.Parent = parent
+
+    -- прямоугольная кнопка открытия (без UICorner)
+    local openBtn = Instance.new("TextButton")
+    openBtn.Name = "OpenButton"
+    openBtn.Size = UDim2.fromOffset(150, 42)
+    openBtn.Position = UDim2.new(0, 12, 1, -54)
+    openBtn.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+    openBtn.BorderSizePixel = 0
+    openBtn.Font = Enum.Font.GothamBold
+    openBtn.TextSize = 15
+    openBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    openBtn.Text = "CROWS HUB"
+    openBtn.AutoButtonColor = true
+    openBtn.Parent = gui
+    local openStroke = Instance.new("UIStroke")
+    openStroke.Color = Color3.fromRGB(255, 70, 70)
+    openStroke.Thickness = 2
+    openStroke.Parent = openBtn
+
+    -- окно
+    local win = Instance.new("Frame")
+    win.Name = "Window"
+    win.Size = UDim2.fromOffset(310, 360)
+    win.Position = UDim2.new(0.5, -155, 0.5, -180)
+    win.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+    win.BorderSizePixel = 0
+    win.Active = true
+    win.Visible = true
+    win.Parent = gui
+    local winStroke = Instance.new("UIStroke")
+    winStroke.Color = Color3.fromRGB(70, 70, 90)
+    winStroke.Thickness = 1
+    winStroke.Parent = win
+
+    -- тайтлбар + крестик + перетаскивание
+    local title = Instance.new("TextButton")
+    title.Name = "TitleBar"
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    title.BorderSizePixel = 0
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 14
+    title.TextColor3 = Color3.fromRGB(255, 90, 90)
+    title.Text = "  CROWS HUB • Demonology"
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = win
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.fromOffset(30, 30)
+    closeBtn.Position = UDim2.new(1, -30, 0, 0)
+    closeBtn.BackgroundTransparency = 1
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 14
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.Text = "X"
+    closeBtn.Parent = title
+
+    local dragging, dragStart, startPos = false, nil, nil
+    title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = win.Position
         end
-    end,
-})
-TabChar:Slider({
-    Title = "FOV",
-    Desc = "Поле зрения камеры",
-    Step = 1,
-    Value = { Min = 30, Max = 250, Default = 70 },
-    Callback = function(v)
-        CFG.FOV = v
-        fovApply()
-    end,
-})
-TabChar:Input({
-    Title = "FOV (вписать)",
-    Placeholder = "число 30-250",
-    Callback = function(txt)
-        local n = tonumber((tostring(txt or ""):gsub("[^%d]", "")))
-        if n then
-            n = math.clamp(n, 30, 250)
-            CFG.FOV = n
-            fovApply()
-            Notify("Персонаж", "FOV: " .. n, 2)
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
         end
-    end,
-})
-TabChar:Button({
-    Title = "↩ Сброс (скорость 16, FOV 70)",
-    Callback = function()
-        CFG.Speed = 16
-        CFG.FOV = 70
-        speedApply()
-        fovApply()
-        Notify("Персонаж", "Скорость 16, FOV 70", 2)
-    end,
-})
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
 
--- ═══ UI: ВКЛАДКА ВИЗУАЛ ═══
-TabVis:Section({ Title = "Освещение" })
-TabVis:Toggle({
-    Title = "Fullbright",
-    Desc = "Полная яркость: Ambient + OutdoorAmbient + без тумана и теней",
-    Value = false,
-    Callback = function(v)
-        CFG.Fullbright = v
-        fullbrightApply()
-    end,
-})
-TabVis:Toggle({
-    Title = "Sun Bright Fullbright (мягкий)",
-    Desc = "Только яркость солнца, тени и мрак в комнатах остаются — выглядит естественнее",
-    Value = false,
-    Callback = function(v)
-        CFG.SunFullbright = v
-        fullbrightApply()
-    end,
-})
+    -- скролл-контент
+    local content = Instance.new("ScrollingFrame")
+    content.Name = "Content"
+    content.Size = UDim2.new(1, -8, 1, -38)
+    content.Position = UDim2.fromOffset(4, 32)
+    content.BackgroundTransparency = 1
+    content.BorderSizePixel = 0
+    content.ScrollingDirection = Enum.ScrollingDirection.Y
+    content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    content.CanvasSize = UDim2.new(0, 0, 0, 0)
+    content.ScrollBarThickness = 4
+    content.Parent = win
+    local list = Instance.new("UIListLayout")
+    list.Padding = UDim.new(0, 4)
+    list.SortOrder = Enum.SortOrder.LayoutOrder
+    list.Parent = content
+
+    local order = 0
+    local function nextOrder() order = order + 1 return order end
+
+    local function mkToggle(text, get, set)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -8, 0, 30)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 13
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.LayoutOrder = nextOrder()
+        btn.Parent = content
+        local function refresh()
+            btn.Text = (get() and "🟢 " or "⚫ ") .. text
+            btn.TextColor3 = get() and Color3.fromRGB(140, 255, 160) or Color3.fromRGB(200, 200, 210)
+        end
+        btn.MouseButton1Click:Connect(function()
+            set(not get())
+            refresh()
+        end)
+        refresh()
+        return btn
+    end
+
+    local function mkValueRow(text, get, set, step, min, max)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, -8, 0, 30)
+        row.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+        row.BorderSizePixel = 0
+        row.LayoutOrder = nextOrder()
+        row.Parent = content
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -80, 1, 0)
+        lbl.Position = UDim2.fromOffset(8, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 13
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = row
+        local function refresh()
+            lbl.Text = text .. ": " .. tostring(get())
+        end
+        local function mkBtn(sign, dx)
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.fromOffset(30, 22)
+            b.Position = UDim2.new(1, dx, 0.5, -11)
+            b.BackgroundColor3 = Color3.fromRGB(50, 50, 62)
+            b.BorderSizePixel = 0
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 14
+            b.TextColor3 = Color3.fromRGB(255, 255, 255)
+            b.Text = sign
+            b.Parent = row
+            b.MouseButton1Click:Connect(function()
+                local delta = (sign == "-") and -step or step
+                set(math.clamp(get() + delta, min, max))
+                refresh()
+            end)
+        end
+        mkBtn("-", -70)
+        mkBtn("+", -36)
+        refresh()
+        return row
+    end
+
+    -- тогглы
+    mkToggle("Сканировать журнал (авто)", function() return CFG.EvidenceWatch end, function(v) ACTIONS.EvidenceWatch(v) end)
+    mkToggle("Показывать панель", function() return CFG.PanelVisible end, function(v) ACTIONS.PanelVisible(v) end)
+    mkToggle("👻 Ghost ESP", function() return CFG.GhostESP end, function(v) ACTIONS.GhostESP(v) end)
+    mkToggle("🔮 Ghost Orb ESP", function() return CFG.OrbESP end, function(v) ACTIONS.OrbESP(v) end)
+    mkToggle("🖐 Handprints ESP", function() return CFG.HandprintsESP end, function(v) ACTIONS.HandprintsESP(v) end)
+    mkToggle("🐾 Scratch ESP", function() return CFG.ScratchESP end, function(v) ACTIONS.ScratchESP(v) end)
+    mkToggle("📦 Item ESP", function() return CFG.ItemESP end, function(v) ACTIONS.ItemESP(v) end)
+    mkToggle("Ghost Info (Spirit Box)", function() return CFG.GhostInfo end, function(v) ACTIONS.GhostInfo(v) end)
+    mkToggle("♾ Инф стамина", function() return CFG.InfStamina end, function(v) ACTIONS.InfStamina(v) end)
+    mkToggle("Fullbright", function() return CFG.Fullbright end, function(v) ACTIONS.Fullbright(v) end)
+    mkToggle("Sun Bright (мягкий)", function() return CFG.SunFullbright end, function(v) ACTIONS.SunFullbright(v) end)
+    mkValueRow("Скорость", function() return CFG.Speed end, function(n) ACTIONS.Speed(n) end, 2, 8, 100)
+    mkValueRow("FOV", function() return CFG.FOV end, function(n) ACTIONS.FOV(n) end, 10, 30, 250)
+
+    -- кнопка ПРОВЕРИТЬ УЛИКИ + отчёт внутри меню
+    local checkBtn = Instance.new("TextButton")
+    checkBtn.Size = UDim2.new(1, -8, 0, 34)
+    checkBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+    checkBtn.BorderSizePixel = 0
+    checkBtn.Font = Enum.Font.GothamBold
+    checkBtn.TextSize = 14
+    checkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    checkBtn.Text = "🔍 ПРОВЕРИТЬ УЛИКИ"
+    checkBtn.LayoutOrder = nextOrder()
+    checkBtn.Parent = content
+    local reportLbl = Instance.new("TextLabel")
+    reportLbl.Size = UDim2.new(1, -8, 0, 170)
+    reportLbl.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    reportLbl.BorderSizePixel = 0
+    reportLbl.Font = Enum.Font.Code
+    reportLbl.TextSize = 11
+    reportLbl.TextColor3 = Color3.fromRGB(230, 232, 240)
+    reportLbl.TextXAlignment = Enum.TextXAlignment.Left
+    reportLbl.TextYAlignment = Enum.TextYAlignment.Top
+    reportLbl.TextWrapped = true
+    reportLbl.Text = "нажми «ПРОВЕРИТЬ УЛИКИ» —\nтут будут улики, запись журнала\nи решение (призрак)"
+    reportLbl.LayoutOrder = nextOrder()
+    reportLbl.Parent = content
+    checkBtn.MouseButton1Click:Connect(function()
+        local ok, rep = pcall(buildReport)
+        if ok then reportLbl.Text = rep end
+    end)
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(1, -8, 0, 28)
+    resetBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    resetBtn.BorderSizePixel = 0
+    resetBtn.Font = Enum.Font.Gotham
+    resetBtn.TextSize = 12
+    resetBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+    resetBtn.Text = "↩ Сброс данных (новый раунд)"
+    resetBtn.LayoutOrder = nextOrder()
+    resetBtn.Parent = content
+    resetBtn.MouseButton1Click:Connect(function()
+        ACTIONS.ResetData()
+        reportLbl.Text = "данные сброшены"
+    end)
+
+    -- открытие/закрытие
+    openBtn.MouseButton1Click:Connect(function()
+        win.Visible = not win.Visible
+    end)
+    closeBtn.MouseButton1Click:Connect(function()
+        win.Visible = false
+    end)
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            win.Visible = not win.Visible
+        end
+    end)
+
+    print("[DHL] резервный GUI готов — кнопка CROWS HUB на экране")
+    return true
+end
+
+-- ═══ СБОРКА UI ═══
+if WindUI then
+    local okUI = pcall(buildWindUI)
+    if okUI then
+        UI_MODE = "windui"
+    else
+        warn("[DHL] Wind UI не собрался — включаю резервный GUI")
+    end
+end
+if UI_MODE == "none" then
+    local okFB = pcall(buildFallbackGui)
+    UI_MODE = okFB and "fallback" or "none"
+end
 
 -- ═══ ЗАВЕРШЕНИЕ ═══
-print("[DHL] Demonology Helper v1.0 загружен")
-Notify("Demonology Helper", "Загружен!", "Right Shift — меню, прямоугольная кнопка тоже открывает", 6)
-
--- уборка при закрытии окна (если WindUI даёт колбэк)
-pcall(function()
-    Window:OnClose(function()
-        getgenv().DHL_RUN = false
-        espCleanup()
-        if panelGui then panelGui:Destroy() end
-        CFG.Fullbright, CFG.SunFullbright = false, false
-        fullbrightApply()
-        CFG.Speed = 16
-        speedApply()
-        fovApply()
+print("[DHL] Crows Hub Demonology v1.1 загружен, UI: " .. UI_MODE)
+if UI_MODE == "windui" then
+    Notify("Crows Hub", "Demonology v1.1 загружен! Right Shift или кнопка «Crows Hub» — меню", 6)
+elseif UI_MODE == "fallback" then
+    Notify("Crows Hub", "Demonology v1.1 загружен (встроенный GUI)! Кнопка «CROWS HUB» слева снизу", 6)
+else
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Crows Hub",
+            Text = "GUI не построился — пришли лог из консоли исполнителя",
+            Duration = 8,
+        })
     end)
-end)
+    warn("[DHL] ни Wind UI, ни резервный GUI не построились")
+end
