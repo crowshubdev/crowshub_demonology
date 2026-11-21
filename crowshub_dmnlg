@@ -37,6 +37,9 @@ pcall(function()
     end
 end)
 GENV.DHL_Window = nil
+-- ВАЖНО: DHL_RUN = true ДО запуска циклов — иначе корутины стартуют
+-- сразу и первый же "if not DHL_RUN then break" убивает их навсегда
+GENV.DHL_RUN = true
 pcall(function()
     local old = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("DHL_Panel")
     if old then old:Destroy() end
@@ -149,6 +152,7 @@ local CFG = {
     Fullbright = false,
     SunFullbright = false,
     InfStamina = false,
+    AntiHunt = false,
     Speed = 16,
     FOV = 70,
     PanelVisible = true,
@@ -355,9 +359,135 @@ local function scanPills()
     DATA.lastUpdate = os.clock()
 end
 
+-- ═══ СКАНЕР МИРА (реальные объекты игры, как в Demonology Pro) ═══
+-- Раз в секунду один прогон workspace:GetDescendants():
+-- улики, температура комнат, стамина-инфо, призрак, охота.
+local worldScan = {
+    prints = false, orb = nil, insc = nil, emf = 0,
+    writing = false, wither = false, laserPlaced = false,
+    minTemp = nil, minTempRoom = "?",
+    sbAnswer = "", hunting = "?", itemsCount = 0,
+}
+local function scanWorld()
+    local okW, errW = pcall(function()
+        worldScan.prints = false
+        worldScan.orb = nil
+        worldScan.insc = nil
+        worldScan.emf = 0
+        worldScan.writing = false
+        worldScan.wither = false
+        worldScan.laserPlaced = false
+        worldScan.itemsCount = 0
+        -- температура комнат (атрибут Temperature у workspace.Map.Rooms/*)
+        local minTemp, minRoom = nil, "?"
+        local m = workspace:FindFirstChild("Map")
+        local rooms = m and m:FindFirstChild("Rooms")
+        if rooms then
+            for _, room in ipairs(rooms:GetChildren()) do
+                local t = room:GetAttribute("Temperature")
+                if t ~= nil and (minTemp == nil or t < minTemp) then
+                    minTemp, minRoom = t, room.Name
+                end
+            end
+        end
+        worldScan.minTemp = minTemp
+        worldScan.minTempRoom = minRoom
+        -- папка Handprints + глобальный прогон
+        local handFolder = workspace:FindFirstChild("Handprints")
+        if handFolder and #handFolder:GetChildren() > 0 then
+            worldScan.prints = true
+        end
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local n = d.Name
+                if n == "Handprint1" or n == "Handprint2"
+                    or n == "Footprint" or n == "Footprint1" then
+                    worldScan.prints = true
+                elseif n == "GhostOrb" and worldScan.orb == nil then
+                    worldScan.orb = d
+                elseif n:lower():find("inscription") and worldScan.insc == nil then
+                    worldScan.insc = d
+                end
+            elseif d:IsA("Folder") and d.Name == "Indicators" then
+                for _, v in ipairs(d:GetChildren()) do
+                    if v:IsA("BasePart") and v.Material == Enum.Material.Neon
+                        and tonumber(v.Name) and tonumber(v.Name) > worldScan.emf then
+                        worldScan.emf = tonumber(v.Name)
+                    end
+                end
+            elseif d:IsA("Decal") then
+                local m2 = d:FindFirstAncestorWhichIsA("Model")
+                if m2 and m2:GetAttribute("ItemName") == "Spirit Book"
+                    and d.Texture ~= nil and d.Texture ~= "" then
+                    worldScan.writing = true
+                end
+            elseif d:IsA("BasePart") and d.Name == "Petals" then
+                local c = d.Color
+                if c and c.R == 0 and c.G == 0 and c.B == 0 then
+                    worldScan.wither = true
+                end
+            end
+        end
+        -- предметы: сколько всего + лазерный проектор
+        local items = workspace:FindFirstChild("Items")
+        if items then
+            for _, it in ipairs(items:GetChildren()) do
+                worldScan.itemsCount = worldScan.itemsCount + 1
+                local dn = it:GetAttribute("DisplayName") or it.Name
+                if dn == "Laser Projector" then worldScan.laserPlaced = true end
+                if it.Name == "Petals" then
+                    for _, pp in ipairs(it:GetDescendants()) do
+                        if pp:IsA("BasePart") and pp.Name == "Petals" then
+                            local c = pp.Color
+                            if c and c.R == 0 and c.G == 0 and c.B == 0 then
+                                worldScan.wither = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- Spirit Box: субтитры с ответом призрака
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local sub = pg and pg:FindFirstChild("Subtitles")
+            local holder = sub and sub:FindFirstChild("Holder")
+            local tl = holder and holder:FindFirstChildWhichIsA("TextLabel")
+            worldScan.sbAnswer = (tl and tl.Text or "")
+        end)
+        -- призрак: охота?
+        local g = workspace:FindFirstChild("Ghost")
+        worldScan.hunting = (g and g:GetAttribute("Hunting") == true) and "ОХОТА!" or (g and "спокоен" or "?")
+    end)
+    if not okW then warn("[DHL] worldScan error: " .. tostring(errW)) end
+end
+
+-- перенос найденных улик в DATA (только добавление — улики не исчезают)
+local function applyWorldEvidence()
+    if not CFG.EvidenceWatch then return end
+    local E = DATA.evidence
+    local added = false
+    local function add(k)
+        if not E[k] then E[k] = true added = true end
+    end
+    if worldScan.prints then add("Prints") end
+    if worldScan.orb then add("Orb") end
+    if worldScan.insc or worldScan.writing then add("Inscription") end
+    if worldScan.emf >= 5 then add("EMF") end
+    if worldScan.wither then add("Wither") end
+    if worldScan.minTemp ~= nil and worldScan.minTemp <= 0 then add("Freezing") end
+    if #worldScan.sbAnswer:gsub("%s+", "") >= 3 then add("SB") end
+    if added then
+        DATA.lastUpdate = os.clock()
+        DATA.solverLines = solverLines()
+    end
+end
+
 -- ═══ ОТЧЁТ «ПРОВЕРИТЬ УЛИКИ» (улики + журнал + решение + статус) ═══
 local function buildReport()
     scanPills() -- форс-скан прямо по нажатию
+    scanWorld()
+    applyWorldEvidence()
     local L = {}
     L[#L + 1] = "── УЛИКИ ──"
     local found = 0
@@ -504,15 +634,33 @@ end
 
 local function giText()
     local t = DATA.temperature
+    if worldScan.minTemp ~= nil and (t == nil or worldScan.minTemp < t) then
+        t = worldScan.minTemp
+        DATA.temperature = t
+        DATA.room = worldScan.minTempRoom
+    end
+    if worldScan.hunting ~= "?" then DATA.hunting = worldScan.hunting end
     local lines = {
         "Возраст: " .. DATA.age,
         "Пол: " .. DATA.gender,
-        "Комната: " .. DATA.room,
+        "Комната (холодная): " .. DATA.room,
         "Любимая комната: " .. DATA.favRoom,
         "Температура: " .. (t and string.format("%.1f", t) or "n/a"),
         "Сложность: " .. DATA.difficulty,
         "Состояние: " .. DATA.hunting,
     }
+    if #worldScan.sbAnswer:gsub("%s+", "") >= 3 then
+        lines[#lines + 1] = "Spirit Box: " .. worldScan.sbAnswer
+    end
+    if worldScan.emf > 0 then
+        lines[#lines + 1] = "EMF сейчас: " .. worldScan.emf
+    end
+    if worldScan.laserPlaced then
+        lines[#lines + 1] = "Лазер: поставлен"
+    end
+    if worldScan.itemsCount > 0 then
+        lines[#lines + 1] = "Предметов: " .. worldScan.itemsCount
+    end
     return table.concat(lines, "\n")
 end
 
@@ -586,6 +734,10 @@ local function espAttach(obj, text, color, showDist)
 end
 
 local function findGhostModel()
+    -- в Demonology модель призрака называется просто Ghost
+    local g = workspace:FindFirstChild("Ghost")
+    if g and g.Parent then return g end
+    -- запасной поиск по именам из матрицы (на случай обновления игры)
     for _, d in ipairs(workspace:GetChildren()) do
         if d:IsA("Model") then
             local nm = d.Name:lower()
@@ -606,7 +758,7 @@ local function findGhostModel()
 end
 
 local function espLoop()
-    pcall(function()
+    local okE, errE = pcall(function()
         for obj in pairs(espObjects) do
             if not obj.Parent then espObjects[obj] = nil end
         end
@@ -615,31 +767,68 @@ local function espLoop()
 
         if CFG.GhostESP then
             local g = findGhostModel()
-            if g then espAttach(g, "👻 " .. g.Name, Color3.fromRGB(255, 64, 64), true) end
+            if g then
+                espAttach(g, "👻 Ghost" .. (g:GetAttribute("Hunting") == true and " — ОХОТА!" or ""), Color3.fromRGB(255, 64, 64), true)
+            end
         end
         if CFG.OrbESP then
-            local orb = workspace:FindFirstChild("GhostOrb") or workspace:FindFirstChild("GhostOrb", true)
-            if orb then espAttach(orb, "🔮 Ghost Orb", Color3.fromRGB(170, 120, 255), true) end
+            -- часть GhostOrb где-то в комнате призрака (не папка!)
+            local orb = worldScan.orb
+            if orb and orb.Parent then
+                espAttach(orb, "🔮 Ghost Orb", Color3.fromRGB(170, 120, 255), true)
+            end
         end
         if CFG.HandprintsESP then
-            local hp = workspace:FindFirstChild("Handprints") or workspace:FindFirstChild("Handprints", true)
-            if hp then espAttach(hp, "🖐 Handprints", Color3.fromRGB(255, 170, 80), true) end
+            -- каждая часть из папки Handprints отдельно (Highlight на
+            -- папку не рендерится)
+            local hp = workspace:FindFirstChild("Handprints")
+            if hp then
+                for _, part in ipairs(hp:GetChildren()) do
+                    if part and part.Parent then
+                        espAttach(part, "🖐 Handprint", Color3.fromRGB(255, 170, 80), true)
+                    end
+                end
+            end
+            -- запасной вариант: принты разбросаны по workspace
+            if worldScan.prints then
+                for _, d in ipairs(workspace:GetDescendants()) do
+                    if d:IsA("BasePart") and (d.Name == "Handprint1" or d.Name == "Handprint2"
+                        or d.Name == "Footprint" or d.Name == "Footprint1")
+                        and d.Parent and d.Parent ~= hp then
+                        espAttach(d, "🖐 Prints", Color3.fromRGB(255, 170, 80), true)
+                    end
+                end
+            end
         end
         if CFG.ScratchESP then
-            local sc = workspace:FindFirstChild("ScratchText") or workspace:FindFirstChild("ScratchText", true)
-            if sc then espAttach(sc, "🐾 Scratch", Color3.fromRGB(120, 255, 160), true) end
+            -- Inscription: надписи/царапины призрака (часть с именем Inscription*)
+            local sc = worldScan.insc
+            if sc and sc.Parent then
+                espAttach(sc, "🐾 Inscription", Color3.fromRGB(120, 255, 160), true)
+            end
         end
         if CFG.ItemESP then
-            local okT, tagged = pcall(function() return CollectionService:GetTagged("interactables") end)
-            if okT and tagged then
-                for _, it in ipairs(tagged) do
+            -- предметы лежат в workspace.Items и workspace.Interactables
+            local items = workspace:FindFirstChild("Items")
+            if items then
+                for _, it in ipairs(items:GetChildren()) do
                     if it and it.Parent then
-                        espAttach(it, "📦 " .. it.Name, Color3.fromRGB(90, 230, 130), true)
+                        local dn = it:GetAttribute("DisplayName")
+                        espAttach(it, "📦 " .. (dn or it.Name), Color3.fromRGB(90, 230, 130), true)
+                    end
+                end
+            end
+            local inter = workspace:FindFirstChild("Interactables")
+            if inter then
+                for _, it in ipairs(inter:GetChildren()) do
+                    if it and it.Parent then
+                        espAttach(it, "✳ " .. it.Name, Color3.fromRGB(230, 210, 90), true)
                     end
                 end
             end
         end
     end)
+    if not okE then warn("[DHL] espLoop error: " .. tostring(errE)) end
 end
 
 -- ═══ FULLBRIGHT ═══
@@ -692,7 +881,17 @@ end
 local staminaMaxSeen = 0
 local function staminaTick()
     pcall(function()
+        -- в Demonology стамина = атрибут Energy у игрока (0-100)
+        local e = LocalPlayer:GetAttribute("Energy")
+        if e ~= nil and e < 100 then
+            LocalPlayer:SetAttribute("Energy", 100)
+        end
         local c = getChar(LocalPlayer)
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        if h and h:GetAttribute("Energy") ~= nil and h:GetAttribute("Energy") < 100 then
+            h:SetAttribute("Energy", 100)
+        end
+        -- запасные способы (на случай смены механики)
         local holders = { c, LocalPlayer }
         for _, holder in ipairs(holders) do
             if holder then
@@ -709,6 +908,37 @@ local function staminaTick()
                     holder:SetAttribute("Stamina", staminaMaxSeen)
                 end
             end
+        end
+    end)
+end
+
+-- ═══ АНТИ-ХАНТ: при начале охоты мгновенный ТП на базу ═══
+local huntConn = nil
+local function tpBaseCamp()
+    pcall(function()
+        local m = workspace:FindFirstChild("Map")
+        local rooms = m and m:FindFirstChild("Rooms")
+        local peg = rooms and rooms:FindFirstChild("Base Camp")
+        peg = peg and peg:FindFirstChild("Pegboard")
+        local union = peg and peg:FindFirstChild("Union")
+        local hrp = getHRP(getChar(LocalPlayer))
+        if union and hrp then
+            hrp.CFrame = union.CFrame + Vector3.new(0, 3, 0)
+        end
+    end)
+end
+local function antiHuntApply()
+    pcall(function()
+        if CFG.AntiHunt and not huntConn then
+            huntConn = workspace.DescendantAdded:Connect(function(d)
+                if not GENV.DHL_RUN or not CFG.AntiHunt then return end
+                if d:IsA("Sound") and d.Name == "Hunt" then
+                    task.spawn(tpBaseCamp)
+                end
+            end)
+        elseif not CFG.AntiHunt and huntConn then
+            pcall(huntConn.Disconnect, huntConn)
+            huntConn = nil
         end
     end)
 end
@@ -730,7 +960,14 @@ ACTIONS.GhostInfo = function(v)
 end
 ACTIONS.Fullbright = function(v) CFG.Fullbright = v fullbrightApply() end
 ACTIONS.SunFullbright = function(v) CFG.SunFullbright = v fullbrightApply() end
-ACTIONS.InfStamina = function(v) CFG.InfStamina = v end
+ACTIONS.InfStamina = function(v) CFG.InfStamina = v if v then staminaTick() end end
+ACTIONS.AntiHunt = function(v)
+    CFG.AntiHunt = v
+    antiHuntApply()
+    if v then
+        Notify("Анти-хант", "Включён: при охоте телепортирует на базу", 3)
+    end
+end
 ACTIONS.PanelVisible = function(v)
     CFG.PanelVisible = v
     panelVisible(v)
@@ -760,12 +997,19 @@ end
 
 -- ═══ ЦИКЛЫ ═══
 local panelRefreshT = 0
+local worldScanT = 0
 task.spawn(function()
     while true do
         if not GENV.DHL_RUN then break end
         local ok, err = pcall(function()
+            if os.clock() - worldScanT > 1 then
+                worldScanT = os.clock()
+                scanWorld()
+                applyWorldEvidence()
+            end
             if CFG.EvidenceWatch then
                 scanPills()
+                applyWorldEvidence()
             end
             if CFG.GhostESP or CFG.OrbESP or CFG.HandprintsESP or CFG.ScratchESP or CFG.ItemESP then
                 espLoop()
@@ -801,7 +1045,7 @@ task.spawn(function()
         task.wait(1)
     end
 end)
-GENV.DHL_RUN = true
+-- DHL_RUN = true уже установлен выше, до запуска циклов
 
 -- ═══════════════════════════════════════════════════════════════
 --  UI A: WIND UI (безопасные обёртки — одна ошибка не валит скрипт)
@@ -947,7 +1191,7 @@ local function buildWindUI()
     safe(function()
         return TabESP:Toggle({
             Title = "🔮 Ghost Orb ESP",
-            Desc = "workspace.GhostOrb",
+            Desc = "Часть GhostOrb в комнате призрака",
             Value = false,
             Callback = function(v) ACTIONS.OrbESP(v) end,
         })
@@ -962,8 +1206,8 @@ local function buildWindUI()
     end, "Toggle Handprints")
     safe(function()
         return TabESP:Toggle({
-            Title = "🐾 Scratch ESP",
-            Desc = "workspace.ScratchText (царапины)",
+            Title = "🐾 Inscription ESP",
+            Desc = "Надписи/царапины призрака (Inscription)",
             Value = false,
             Callback = function(v) ACTIONS.ScratchESP(v) end,
         })
@@ -971,7 +1215,7 @@ local function buildWindUI()
     safe(function()
         return TabESP:Toggle({
             Title = "📦 Item ESP",
-            Desc = "Все предметы с тегом interactables",
+            Desc = "workspace.Items + Interactables",
             Value = false,
             Callback = function(v) ACTIONS.ItemESP(v) end,
         })
@@ -993,6 +1237,14 @@ local function buildWindUI()
             Desc = "Задавай вопросы через Spirit Box в игре — ответы появятся в панели GHOST INFO. Температура ниже 0 = Freezing Temps.",
         })
     end, "Paragraph Как работает")
+    safe(function()
+        return TabGhost:Toggle({
+            Title = "🩸 Анти-хант (ТП на базу)",
+            Desc = "Как только началась охота — мгновенный телепорт к доске Base Camp",
+            Value = false,
+            Callback = function(v) ACTIONS.AntiHunt(v) end,
+        })
+    end, "Toggle AntiHunt")
 
     -- ── вкладка ПЕРСОНАЖ ──
     safe(function() return TabChar:Section({ Title = "Стамина / Скорость / FOV" }) end, "Section Char")
@@ -1090,6 +1342,8 @@ local function buildWindUI()
             if panelGui then panelGui:Destroy() end
             CFG.Fullbright, CFG.SunFullbright = false, false
             fullbrightApply()
+            CFG.AntiHunt = false
+            antiHuntApply()
             ACTIONS.ResetChar()
         end)
     end)
@@ -1290,9 +1544,10 @@ local function buildFallbackGui()
     mkToggle("👻 Ghost ESP", function() return CFG.GhostESP end, function(v) ACTIONS.GhostESP(v) end)
     mkToggle("🔮 Ghost Orb ESP", function() return CFG.OrbESP end, function(v) ACTIONS.OrbESP(v) end)
     mkToggle("🖐 Handprints ESP", function() return CFG.HandprintsESP end, function(v) ACTIONS.HandprintsESP(v) end)
-    mkToggle("🐾 Scratch ESP", function() return CFG.ScratchESP end, function(v) ACTIONS.ScratchESP(v) end)
+    mkToggle("🐾 Inscription ESP", function() return CFG.ScratchESP end, function(v) ACTIONS.ScratchESP(v) end)
     mkToggle("📦 Item ESP", function() return CFG.ItemESP end, function(v) ACTIONS.ItemESP(v) end)
     mkToggle("Ghost Info (Spirit Box)", function() return CFG.GhostInfo end, function(v) ACTIONS.GhostInfo(v) end)
+    mkToggle("🩸 Анти-хант (ТП на базу)", function() return CFG.AntiHunt end, function(v) ACTIONS.AntiHunt(v) end)
     mkToggle("♾ Инф стамина", function() return CFG.InfStamina end, function(v) ACTIONS.InfStamina(v) end)
     mkToggle("Fullbright", function() return CFG.Fullbright end, function(v) ACTIONS.Fullbright(v) end)
     mkToggle("Sun Bright (мягкий)", function() return CFG.SunFullbright end, function(v) ACTIONS.SunFullbright(v) end)
