@@ -10,14 +10,33 @@
 -- ═══════════════════════════════════════════════════════════════
 print("[DHL] START — Crows Hub Demonology v1.1")
 
--- глушим старый инстанс, если перезапускаешь скрипт
-getgenv().DHL_RUN = false
+-- GENV: безопасная замена getgenv() — на некоторых ПК-инжекторах
+-- getgenv отсутствует, и скрипт молча умирал на первой строке
+local GENV = _G
 pcall(function()
-    if getgenv().DHL_Window and getgenv().DHL_Window.Destroy then
-        getgenv().DHL_Window:Destroy()
+    if type(getgenv) == "function" then
+        local g = getgenv()
+        if type(g) == "table" then GENV = g end
     end
 end)
-getgenv().DHL_Window = nil
+pcall(function()
+    if type(identifyexecutor) == "function" then
+        print("[DHL] Executor: " .. tostring((identifyexecutor())))
+    end
+end)
+
+-- ═══ НЕУБИВАЕМАЯ ОБЁРТКА: любая ошибка запуска показывается
+-- уведомлением на экране (а не молчаливой смертью скрипта) ═══
+local DHL_OK, DHL_ERR = xpcall(function()
+
+-- глушим старый инстанс, если перезапускаешь скрипт
+GENV.DHL_RUN = false
+pcall(function()
+    if GENV.DHL_Window and GENV.DHL_Window.Destroy then
+        GENV.DHL_Window:Destroy()
+    end
+end)
+GENV.DHL_Window = nil
 pcall(function()
     local old = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("DHL_Panel")
     if old then old:Destroy() end
@@ -28,22 +47,53 @@ pcall(function()
 end)
 task.wait(0.2)
 
--- ═══ WIND UI LOADER (2 зеркала × 3 попытки) ═══
+-- ═══ WIND UI LOADER (2 зеркала × 2 CDN × 3 попытки) ═══
 -- ВАЖНО: внутри Wind UI иконки грузятся с GitHub без pcall — любой
 -- сбой сети убивает всю либу, поэтому зеркал несколько и есть
 -- резервный GUI ниже.
+-- httpGet: 4 транспорта подряд — на ПК-инжекторах часто есть только
+-- один из них (HttpGet / HttpGetAsync / request / HttpService)
+local function httpGet(url)
+    local ok, res
+    if type(game.HttpGet) == "function" then
+        ok, res = pcall(game.HttpGet, game, url)
+        if ok and type(res) == "string" and #res > 0 then return res end
+    end
+    if type(game.HttpGetAsync) == "function" then
+        ok, res = pcall(game.HttpGetAsync, game, url)
+        if ok and type(res) == "string" and #res > 0 then return res end
+    end
+    local rq = (type(http_request) == "function" and http_request)
+        or (type(request) == "function" and request)
+        or (syn and type(syn.request) == "function" and syn.request)
+    if rq then
+        ok, res = pcall(rq, { Url = url, Method = "GET" })
+        if ok and type(res) == "table" and type(res.Body) == "string" and #res.Body > 0 then
+            return res.Body
+        end
+    end
+    ok, res = pcall(function()
+        return game:GetService("HttpService"):GetAsync(url)
+    end)
+    if ok and type(res) == "string" and #res > 0 then return res end
+    error("HTTP недоступен в этом исполнителе")
+end
+
 local WINDUI_SOURCES = {
     "https://raw.githubusercontent.com/KevinScripts2024/Gkfkfkdlwsk/refs/heads/main/wind%20(1).txt",
+    "https://cdn.jsdelivr.net/gh/KevinScripts2024/Gkfkfkdlwsk@main/wind%20(1).txt",
     "https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua",
+    "https://cdn.jsdelivr.net/gh/Footagesus/WindUI@main/dist/main.lua",
 }
 local WindUI = nil
 for attempt = 1, 3 do
     for _, url in ipairs(WINDUI_SOURCES) do
         if WindUI then break end
         local ok, src = pcall(function()
-            return game:HttpGet(url)
+            return httpGet(url)
         end)
         if ok and type(src) == "string" and #src > 1000 then
+            print("[DHL] скачано " .. #src .. " байт: " .. url)
             local chunk = loadstring(src)
             if chunk then
                 local ok2, res = pcall(chunk)
@@ -712,7 +762,7 @@ end
 local panelRefreshT = 0
 task.spawn(function()
     while true do
-        if not getgenv().DHL_RUN then break end
+        if not GENV.DHL_RUN then break end
         local ok, err = pcall(function()
             if CFG.EvidenceWatch then
                 scanPills()
@@ -746,12 +796,12 @@ LocalPlayer.CharacterAdded:Connect(function()
 end)
 task.spawn(function()
     while true do
-        if not getgenv().DHL_RUN then break end
+        if not GENV.DHL_RUN then break end
         pcall(speedApply)
         task.wait(1)
     end
 end)
-getgenv().DHL_RUN = true
+GENV.DHL_RUN = true
 
 -- ═══════════════════════════════════════════════════════════════
 --  UI A: WIND UI (безопасные обёртки — одна ошибка не валит скрипт)
@@ -802,7 +852,7 @@ local function buildWindUI()
     end
     if not Window then return false end
 
-    getgenv().DHL_Window = Window
+    GENV.DHL_Window = Window
 
     -- прямоугольная кнопка открытия «Crows Hub»
     pcall(function()
@@ -1035,7 +1085,7 @@ local function buildWindUI()
     -- уборка только при УНИЧТОЖЕНИИ окна (не при закрытии!)
     pcall(function()
         Window:OnDestroy(function()
-            getgenv().DHL_RUN = false
+            GENV.DHL_RUN = false
             espCleanup()
             if panelGui then panelGui:Destroy() end
             CFG.Fullbright, CFG.SunFullbright = false, false
@@ -1340,4 +1390,20 @@ else
         })
     end)
     warn("[DHL] ни Wind UI, ни резервный GUI не построились")
+end
+
+-- конец неубиваемой обёртки: любая ошибка показывается на экране
+end, function(e)
+    return tostring(e) .. "\n" .. (debug and debug.traceback and debug.traceback(e, 2) or "")
+end)
+if not DHL_OK then
+    GENV.DHL_ERR = DHL_ERR
+    warn("[DHL] ОШИБКА ЗАПУСКА: " .. tostring(DHL_ERR))
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Crows Hub — ошибка запуска",
+            Text = (tostring(DHL_ERR):match("([^\n]+)") or "?") .. " — детали в консоли (F9)",
+            Duration = 10,
+        })
+    end)
 end
